@@ -1,0 +1,90 @@
+{
+  "model_version": "yield-risk-v1",
+  "selected_model": "random_forest",
+  "cv_leaderboard": {
+    "logit_l1_C0.01": {
+      "roc_auc": 0.6281702898550725,
+      "pr_auc": 0.08480335143014853
+    },
+    "logit_l1_C0.03": {
+      "roc_auc": 0.6091737117552334,
+      "pr_auc": 0.08307141338447546
+    },
+    "logit_l1_C0.1": {
+      "roc_auc": 0.5304951690821257,
+      "pr_auc": 0.09184015553767058
+    },
+    "random_forest": {
+      "roc_auc": 0.6836755233494363,
+      "pr_auc": 0.09560619424818034
+    },
+    "hist_gbm": {
+      "roc_auc": 0.5716334541062802,
+      "pr_auc": 0.10748673657640392
+    }
+  },
+  "preprocessing": {
+    "raw": 590,
+    "dropped_missing": 28,
+    "dropped_constant": 122,
+    "dropped_duplicate": 169,
+    "kept": 271
+  },
+  "train": {
+    "runs": 1096,
+    "fails": 78,
+    "start": "2008-07-19 11:55:00",
+    "end": "2008-09-26 02:26:00"
+  },
+  "test": {
+    "runs": 471,
+    "fails": 26,
+    "start": "2008-09-26 03:12:00",
+    "end": "2008-10-17 06:07:00",
+    "base_fail_rate": 0.055201698513800426,
+    "roc_auc": 0.6423509075194469,
+    "roc_auc_ci95": [
+      0.5399006088453359,
+      0.7438982328628324
+    ],
+    "pr_auc": 0.08591551300746879,
+    "top_10pct": {
+      "runs_flagged": 47,
+      "fails_caught": 4,
+      "recall": 0.15384615384615385,
+      "precision": 0.0851063829787234,
+      "lift": 1.541734860883797
+    },
+    "top_20pct": {
+      "runs_flagged": 94,
+      "fails_caught": 10,
+      "recall": 0.38461538461538464,
+      "precision": 0.10638297872340426,
+      "lift": 1.9271685761047463
+    },
+    "top_30pct": {
+      "runs_flagged": 141,
+      "fails_caught": 15,
+      "recall": 0.5769230769230769,
+      "precision": 0.10638297872340426,
+      "lift": 1.9271685761047463
+    }
+  },
+  "top_model_sensors": [
+    59,
+    247,
+    129,
+    33,
+    205,
+    290,
+    468,
+    460,
+    64,
+    65,
+    0,
+    103,
+    197,
+    213,
+    153
+  ]
+}

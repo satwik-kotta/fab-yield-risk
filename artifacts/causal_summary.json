@@ -1,0 +1,24 @@
+{
+  "runs": 1567,
+  "fails": 104,
+  "base_fail_rate": 0.06636885768985322,
+  "sensors_after_cleaning": 270,
+  "sensors_screened": 183,
+  "sensors_identified": 147,
+  "z_threshold": 2.5,
+  "fdr": 0.1,
+  "naive_significant": 16,
+  "adjusted_significant": 1,
+  "naive_only": 15,
+  "both": 1,
+  "adjusted_only": 0,
+  "median_overlap": 0.4856413529036375,
+  "placebo_runs": 5,
+  "placebo_adjusted_significant": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

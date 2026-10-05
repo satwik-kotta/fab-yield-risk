@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fab Yield Risk</title>
+<style>
+:root{
+  color-scheme:light;
+  --bg:#f4f3f0;--surface:#fcfcfb;--border:#e2e0da;--text:#0b0b0b;--text2:#52514e;--muted:#85837c;
+  --s1:#2a78d6;--s2:#eb6834;--grid:#e9e7e1;--crit:#c9302f;--warn:#b97a00;--good:#1a7f4b;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --bg:#111110;--surface:#1a1a19;--border:#30302d;--text:#ffffff;--text2:#c3c2b7;--muted:#8d8c84;
+  --s1:#3987e5;--s2:#d95926;--grid:#2a2a28;--crit:#e66767;--warn:#c98500;--good:#3fb37c;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:28px 16px 56px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.01em}
+h2{font-size:16px;margin:0 0 2px}
+p.sub{margin:0 0 14px;color:var(--text2);font-size:13.5px}
+.lede{color:var(--text2);max-width:780px;margin:0 0 22px}
+.grid{display:grid;gap:14px}
+.kpis{grid-template-columns:repeat(4,1fr);margin-bottom:14px}
+.two{grid-template-columns:2fr 1fr;margin-bottom:14px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;min-width:0}
+.kpi .label{font-size:12.5px;color:var(--text2)}
+.kpi .value{font-size:28px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi .note{font-size:12.5px;color:var(--muted)}
+.chart{width:100%;height:320px}
+.chart.tall{height:440px}
+.filters{display:flex;gap:8px;align-items:center;margin:0 0 14px;flex-wrap:wrap;font-size:13.5px;color:var(--text2)}
+.filters button{font:inherit;padding:5px 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer}
+.filters button[aria-pressed="true"]{background:var(--text);color:var(--surface);border-color:var(--text)}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--text2);font-weight:600;font-size:12.5px}
+.tier{display:inline-flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.callout{border-left:3px solid var(--s2);padding:2px 0 2px 12px;margin:10px 0 0;color:var(--text2);font-size:13.5px}
+footer{margin-top:22px;color:var(--muted);font-size:12.5px}
+a{color:var(--s1)}
+@media (max-width:820px){.kpis{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Fab Yield Risk</h1>
+  <p class="lede">Every wafer run on a semiconductor line gets a Yield Risk Score from its sensor readings before inspection results come back. Scores below are for the final 30% of runs, which the model never saw in training. Data: UCI SECOM, 590 sensors per run.</p>
+
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="filters" id="filters"><span>Show</span></div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h2>Yield Risk Score per run, live replay period</h2>
+    <p class="sub">Each point is one wafer run, ranked 0–100 against the 200 runs before it. Diamonds are runs that later failed inspection.</p>
+    <div class="chart" id="timeline"></div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>Fail rate over the whole line history</h2>
+      <p class="sub">Rolling 7-day share of runs failing inspection. The shaded span is the live replay period.</p>
+      <div class="chart" id="trend"></div>
+    </div>
+    <div class="card">
+      <h2>Does a higher tier mean more scrap?</h2>
+      <p class="sub">Actual fail rate of runs in each risk tier.</p>
+      <div class="chart" id="tiers"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h2>Which sensor excursions move yield?</h2>
+    <p class="sub" id="causalSub"></p>
+    <div class="chart tall" id="forest"></div>
+    <p class="callout" id="causalNote"></p>
+  </div>
+
+  <div class="card">
+    <h2>Runs to pull for review</h2>
+    <p class="sub">Highest-risk runs in the current view, with the monitored sensors furthest from their normal range.</p>
+    <div class="scroll"><table id="runs"></table></div>
+  </div>
+
+  <footer>Risk model: <span id="modelNote"></span>. Sensor names in SECOM are anonymised, so findings identify sensor numbers, not process steps. Source and method: see the repository README.</footer>
+</main>
+
+<script src="vendor/echarts.min.js"></script>
+<script src="data.js"></script>
+<script>
+const D = window.FAB_DATA, css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const pct = (x, d = 1) => (100 * x).toFixed(d) + '%';
+const charts = {};
+let tierFilter = 'All';
+const tierColor = t => t === 'High' ? css('--crit') : t === 'Elevated' ? css('--warn') : css('--good');
+
+function kpis() {
+  const t = D.metrics.test, hi = D.tiers.find(r => r.risk_tier === 'High'), el = D.tiers.find(r => r.risk_tier === 'Elevated');
+  const flagged = hi.runs + el.runs, caught = hi.fails + el.fails;
+  const items = [
+    ['Runs scored live', t.runs.toLocaleString(), `${t.fails} later failed (${pct(t.base_fail_rate)})`],
+    ['High-tier fail rate', hi.fail_rate_pct.toFixed(1) + '%', `${(hi.fail_rate_pct / (100 * t.base_fail_rate)).toFixed(1)}× the line average`],
+    ['Fails caught by High + Elevated', `${caught} of ${t.fails}`, `while flagging ${Math.round(100 * flagged / t.runs)}% of runs`],
+    ['Model ROC AUC, held-out', t.roc_auc.toFixed(2), `95% CI ${t.roc_auc_ci95[0].toFixed(2)}–${t.roc_auc_ci95[1].toFixed(2)}: a modest signal`],
+  ];
+  document.getElementById('kpis').innerHTML = items.map(([l, v, n]) =>
+    `<div class="card kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${n}</div></div>`).join('');
+  document.getElementById('modelNote').textContent =
+    `${D.metrics.selected_model.replace('_', ' ')}, trained on ${D.metrics.train.runs} runs (${D.metrics.train.start.slice(0, 10)} to ${D.metrics.train.end.slice(0, 10)})`;
+}
+
+function base() {
+  return { textStyle: { color: css('--text2'), fontFamily: 'system-ui' }, animation: false,
+    tooltip: { backgroundColor: css('--surface'), borderColor: css('--border'), textStyle: { color: css('--text'), fontSize: 13 } } };
+}
+const axis = extra => Object.assign({ axisLine: { lineStyle: { color: css('--border') } }, axisTick: { show: false },
+  axisLabel: { color: css('--text2') }, splitLine: { lineStyle: { color: css('--grid') } } }, extra);
+
+function timeline() {
+  const rows = D.runs.filter(r => tierFilter === 'All' || r.tier === tierFilter);
+  const mk = (f, name, symbol, size, color) => ({ name, type: 'scatter', symbol, symbolSize: size,
+    itemStyle: { color, borderColor: css('--surface'), borderWidth: f ? 1.5 : 0, opacity: f ? 1 : .55 },
+    data: rows.filter(r => !!r.failed === f).map(r => ({ value: [r.ts, r.risk], r })) });
+  const s = [mk(false, 'Passed inspection', 'circle', 7, css('--s1')), mk(true, 'Failed inspection', 'diamond', 13, css('--s2'))];
+  s[0].markLine = { silent: true, symbol: 'none', lineStyle: { color: css('--muted'), type: 'dashed', width: 1 },
+    label: { color: css('--text2'), position: 'insideEndTop' },
+    data: [{ yAxis: 90, label: { formatter: 'High ≥ 90' } }, { yAxis: 70, label: { formatter: 'Elevated ≥ 70' } }] };
+  charts.timeline.setOption(Object.assign(base(), {
+    grid: { left: 44, right: 18, top: 34, bottom: 30 },
+    legend: { top: 0, left: 0, textStyle: { color: css('--text2') }, itemWidth: 12, itemHeight: 12 },
+    tooltip: Object.assign(base().tooltip, { trigger: 'item', formatter: p => { const r = p.data.r;
+      return `<b>Run ${r.run_id}</b> · ${r.ts}<br>Risk score ${r.risk} (${r.tier})<br>${r.failed ? 'Failed inspection' : 'Passed inspection'}<br><span style="opacity:.75">${r.top_sensors}</span>`; } }),
+    xAxis: axis({ type: 'time', splitLine: { show: false } }),
+    yAxis: axis({ type: 'value', min: 0, max: 100 }),
+    series: s }), true);
+}
+
+function trend() {
+  const start = D.metrics.test.start.slice(0, 10);
+  charts.trend.setOption(Object.assign(base(), {
+    grid: { left: 44, right: 18, top: 16, bottom: 30 },
+    tooltip: Object.assign(base().tooltip, { trigger: 'axis', formatter: p => { const d = D.daily[p[0].dataIndex];
+      return `<b>${d.day}</b><br>7-day fail rate ${d.fail_rate_7d_pct.toFixed(1)}%<br>${d.fails} of ${d.runs} runs failed that day`; } }),
+    xAxis: axis({ type: 'category', data: D.daily.map(d => d.day), boundaryGap: false, splitLine: { show: false },
+      axisLabel: { color: css('--text2'), formatter: v => v.slice(5), interval: 13 } }),
+    yAxis: axis({ type: 'value', axisLabel: { color: css('--text2'), formatter: '{value}%' } }),
+    series: [{ type: 'line', data: D.daily.map(d => d.fail_rate_7d_pct), showSymbol: false, lineStyle: { width: 2, color: css('--s1') }, itemStyle: { color: css('--s1') },
+      markArea: { silent: true, itemStyle: { color: css('--s1'), opacity: .08 }, label: { color: css('--text2'), position: 'insideTop' },
+        data: [[{ name: 'Live replay', xAxis: D.daily.find(d => d.day >= start).day }, { xAxis: D.daily[D.daily.length - 1].day }]] } }] }), true);
+}
+
+function tiers() {
+  const base_ = 100 * D.metrics.test.base_fail_rate;
+  charts.tiers.setOption(Object.assign(base(), {
+    grid: { left: 44, right: 18, top: 24, bottom: 30 },
+    tooltip: Object.assign(base().tooltip, { trigger: 'item', formatter: p => { const r = D.tiers[p.dataIndex];
+      return `<b>${r.risk_tier}</b><br>${r.fails} of ${r.runs} runs failed (${r.fail_rate_pct.toFixed(1)}%)<br>${r.share_of_fails_pct.toFixed(0)}% of all fails`; } }),
+    xAxis: axis({ type: 'category', data: D.tiers.map(r => r.risk_tier), splitLine: { show: false } }),
+    yAxis: axis({ type: 'value', axisLabel: { color: css('--text2'), formatter: '{value}%' } }),
+    series: [{ type: 'bar', barWidth: 44, data: D.tiers.map(r => r.fail_rate_pct), itemStyle: { color: css('--s1'), borderRadius: [4, 4, 0, 0] },
+      label: { show: true, position: 'top', color: css('--text'), formatter: p => p.value.toFixed(1) + '%' },
+      markLine: { silent: true, symbol: 'none', lineStyle: { color: css('--muted'), type: 'dashed', width: 1 },
+        label: { color: css('--text2'), formatter: 'line average', position: 'insideEndTop' }, data: [{ yAxis: base_ }] } }] }), true);
+}
+
+function forest() {
+  const c = D.causal_summary, E = D.effects.slice().reverse();
+  document.getElementById('causalSub').textContent =
+    `Change in fail rate when a sensor has an excursion (more than ${c.z_threshold} robust σ from its median). ` +
+    `The ${c.naive_significant} sensors a correlation screen flags, before and after adjusting for line drift and the state of the other sensors. Bars are 95% intervals.`;
+  const lab = e => `Sensor ${e.sensor}` + (e.causal_flag ? '  ✓ holds up' : !e.identified ? '  (not separable)' : '');
+  charts.forest.setOption(Object.assign(base(), {
+    grid: { left: 150, right: 24, top: 34, bottom: 40 },
+    legend: { top: 0, left: 0, textStyle: { color: css('--text2') }, itemWidth: 12, itemHeight: 12 },
+    tooltip: Object.assign(base().tooltip, { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: p => { const e = E[p[0].dataIndex];
+      return `<b>Sensor ${e.sensor}</b> · ${e.excursion_runs} excursion runs<br>Raw difference: ${(100 * e.naive_diff).toFixed(1)} pts (q=${e.naive_q.toFixed(3)})<br>` +
+        (e.identified ? `Adjusted: ${(100 * e.ate).toFixed(1)} pts, 95% CI ${(100 * e.ci_low).toFixed(1)} to ${(100 * e.ci_high).toFixed(1)} (q=${e.q.toFixed(2)})`
+          : 'Adjusted: not estimable, excursions on this sensor almost always coincide with others'); } }),
+    xAxis: axis({ type: 'value', min: Math.floor(Math.min(...E.map(e => 100 * Math.min(e.naive_diff, e.identified ? e.ci_low : 0))) / 5) * 5, max: Math.ceil(Math.max(...E.map(e => 100 * Math.max(e.naive_diff, e.identified ? e.ci_high : 0))) / 5) * 5, name: 'Change in fail rate, percentage points', nameLocation: 'middle', nameGap: 26, nameTextStyle: { color: css('--text2') } }),
+    yAxis: axis({ type: 'category', data: E.map(lab), splitLine: { show: false }, axisLabel: { color: css('--text') } }),
+    series: [
+      { name: 'Raw difference (correlation)', type: 'scatter', symbol: 'circle', symbolSize: 10, itemStyle: { color: css('--s1') }, data: E.map(e => +(100 * e.naive_diff).toFixed(2)) },
+      { name: 'Adjusted effect', type: 'scatter', symbol: 'diamond', symbolSize: 13, itemStyle: { color: css('--s2') }, data: E.map(e => e.identified ? +(100 * e.ate).toFixed(2) : null), z: 3 },
+      { type: 'custom', silent: true, tooltip: { show: false }, data: E.map((e, i) => e.identified ? [100 * e.ci_low, 100 * e.ci_high, i] : [null, null, i]),
+        renderItem: (params, api) => { if (api.value(0) == null || isNaN(api.value(0))) return;
+          const a = api.coord([api.value(0), api.value(2)]), b = api.coord([api.value(1), api.value(2)]);
+          return { type: 'line', shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, style: { stroke: css('--s2'), lineWidth: 2 } }; } }
+    ] }), true);
+  const ok = D.effects.filter(e => e.causal_flag).map(e => 'sensor ' + e.sensor);
+  document.getElementById('causalNote').textContent =
+    `${c.naive_significant} sensors look significant on raw correlation. After adjustment ${c.adjusted_significant} holds up at a ${Math.round(100 * c.fdr)}% false-discovery rate` +
+    (ok.length ? ` (${ok.join(', ')})` : '') + `. The method was run on ${c.placebo_runs} shuffled-outcome placebos and flagged ${c.placebo_adjusted_significant.reduce((a, b) => a + b, 0)} sensors in total.`;
+}
+
+function table() {
+  const rows = D.runs.filter(r => tierFilter === 'All' || r.tier === tierFilter).slice().sort((a, b) => b.risk - a.risk).slice(0, 12);
+  document.getElementById('runs').innerHTML = '<tr><th>Run</th><th>Time</th><th>Risk score</th><th>Tier</th><th>Inspection</th><th>Sensors furthest from normal</th></tr>' +
+    rows.map(r => `<tr><td>${r.run_id}</td><td>${r.ts}</td><td>${r.risk.toFixed(1)}</td><td><span class="tier"><span class="dot" style="background:${tierColor(r.tier)}"></span>${r.tier}</span></td><td>${r.failed ? '◆ Failed' : 'Passed'}</td><td>${r.top_sensors}</td></tr>`).join('');
+}
+
+function filters() {
+  const el = document.getElementById('filters');
+  ['All', 'High', 'Elevated', 'Normal'].forEach(t => { const b = document.createElement('button');
+    b.textContent = t === 'All' ? 'All tiers' : t; b.setAttribute('aria-pressed', t === tierFilter);
+    b.onclick = () => { tierFilter = t; el.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); timeline(); table(); };
+    el.appendChild(b); });
+}
+
+function draw() { timeline(); trend(); tiers(); forest(); table(); }
+['timeline', 'trend', 'tiers', 'forest'].forEach(id => charts[id] = echarts.init(document.getElementById(id)));
+kpis(); filters(); draw();
+addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+</script>
+</body>
+</html>
